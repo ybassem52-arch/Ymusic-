@@ -18,6 +18,7 @@ object PlaybackManager {
     private var mediaPlayer: MediaPlayer? = null
     private val scope = CoroutineScope(Dispatchers.Main + Job())
     private var progressJob: Job? = null
+    private var playJob: Job? = null
 
     private val _currentSong = MutableStateFlow<Song?>(null)
     val currentSong: StateFlow<Song?> = _currentSong
@@ -46,47 +47,68 @@ object PlaybackManager {
     }
 
     fun playSong(context: Context, song: Song) {
+        playJob?.cancel()
         _currentSong.value = song
         _progress.value = 0L
         _duration.value = 0L
         
         mediaPlayer?.release()
-        mediaPlayer = MediaPlayer().apply {
-            try {
-                // If song is downloaded, play the local file to save data
-                if (song.isDownloaded && !song.localFilePath.isNullOrEmpty() && File(song.localFilePath).exists()) {
-                    setDataSource(song.localFilePath)
-                } else {
-                    setDataSource(song.audioUrl)
-                }
-                prepareAsync()
-                setOnPreparedListener { mp ->
-                    mp.start()
-                    _isPlaying.value = true
-                    _duration.value = mp.duration.toLong()
-                    startProgressUpdate()
+        mediaPlayer = null
+        _isPlaying.value = false
 
-                    // Start Background Playback Foreground Service
-                    val serviceIntent = Intent(context, MusicPlaybackService::class.java).apply {
-                        action = MusicPlaybackService.ACTION_PLAY
-                    }
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                        context.startForegroundService(serviceIntent)
+        playJob = scope.launch {
+            try {
+                val finalUrl: String
+                val isLocal = song.isDownloaded && !song.localFilePath.isNullOrEmpty() && File(song.localFilePath).exists()
+                
+                if (isLocal) {
+                    finalUrl = song.localFilePath!!
+                } else {
+                    android.widget.Toast.makeText(context, "جاري جلب الأغنية من خوادم YouTube...", android.widget.Toast.LENGTH_SHORT).show()
+                    val resolved = com.example.data.api.GeminiClient.resolveStreamUrl(song.id, song.title, song.artist)
+                    if (!resolved.isNullOrEmpty()) {
+                        finalUrl = resolved
+                    } else if (song.audioUrl.isNotEmpty()) {
+                        finalUrl = song.audioUrl
                     } else {
-                        context.startService(serviceIntent)
+                        android.widget.Toast.makeText(context, "عذراً، فشل جلب رابط تشغيل الأغنية", android.widget.Toast.LENGTH_LONG).show()
+                        return@launch
                     }
                 }
-                setOnCompletionListener {
-                    playNext(context)
-                }
-                setOnErrorListener { _, _, _ ->
-                    _isPlaying.value = false
-                    stopProgressUpdate()
-                    true
+
+                mediaPlayer = MediaPlayer().apply {
+                    setDataSource(finalUrl)
+                    prepareAsync()
+                    setOnPreparedListener { mp ->
+                        mp.start()
+                        _isPlaying.value = true
+                        _duration.value = mp.duration.toLong()
+                        startProgressUpdate()
+
+                        // Start Background Playback Foreground Service
+                        val serviceIntent = Intent(context, MusicPlaybackService::class.java).apply {
+                            action = MusicPlaybackService.ACTION_PLAY
+                        }
+                        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                            context.startForegroundService(serviceIntent)
+                        } else {
+                            context.startService(serviceIntent)
+                        }
+                    }
+                    setOnCompletionListener {
+                        playNext(context)
+                    }
+                    setOnErrorListener { _, _, _ ->
+                        _isPlaying.value = false
+                        stopProgressUpdate()
+                        android.widget.Toast.makeText(context, "خطأ أثناء محاولة تشغيل الصوت", android.widget.Toast.LENGTH_SHORT).show()
+                        true
+                    }
                 }
             } catch (e: Exception) {
                 e.printStackTrace()
                 _isPlaying.value = false
+                android.widget.Toast.makeText(context, "فشل في تشغيل الأغنية أونلاين", android.widget.Toast.LENGTH_SHORT).show()
             }
         }
     }

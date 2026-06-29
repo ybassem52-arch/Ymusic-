@@ -58,7 +58,13 @@ class MusicRepository(
             // First ensure the song metadata is saved in the database
             musicDao.insertSong(song)
 
-            val url = song.audioUrl
+            var url = song.audioUrl
+            if (url.isEmpty() || song.id.startsWith("yt_") || song.id.startsWith("f_") || url.contains("soundhelix")) {
+                val resolved = com.example.data.api.GeminiClient.resolveStreamUrl(song.id, song.title, song.artist)
+                if (!resolved.isNullOrEmpty()) {
+                    url = resolved
+                }
+            }
             if (url.isEmpty()) return@withContext false
 
             val request = Request.Builder().url(url).build()

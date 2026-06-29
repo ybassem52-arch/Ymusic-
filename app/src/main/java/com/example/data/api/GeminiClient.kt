@@ -103,7 +103,112 @@ object GeminiClient {
         )
     )
 
+    val PIPED_INSTANCES = listOf(
+        "https://pipedapi.kavin.rocks",
+        "https://pipedapi.tokhmi.xyz",
+        "https://pipedapi.r06.rocks",
+        "https://piped-api.lunar.icu",
+        "https://pipedapi.colbyland.xyz",
+        "https://pipedapi.riv.yt"
+    )
+
+    suspend fun searchPiped(query: String): List<Song> = withContext(Dispatchers.IO) {
+        for (instance in PIPED_INSTANCES) {
+            try {
+                val encodedQuery = java.net.URLEncoder.encode(query, "UTF-8")
+                val url = "$instance/search?q=$encodedQuery&filter=music_songs"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: return@use
+                        val jsonArray = org.json.JSONArray(body)
+                        val results = mutableListOf<Song>()
+                        for (i in 0 until jsonArray.length()) {
+                            val obj = jsonArray.getJSONObject(i)
+                            val itemUrl = obj.optString("url", "")
+                            val videoId = if (itemUrl.contains("v=")) {
+                                itemUrl.substringAfter("v=")
+                            } else {
+                                itemUrl.substringAfterLast("/")
+                            }
+                            if (videoId.isEmpty()) continue
+                            
+                            val title = obj.optString("title", "")
+                            val artist = obj.optString("uploaderName", "Unknown Artist")
+                            val durationSec = obj.optInt("duration", 0)
+                            val minutes = durationSec / 60
+                            val seconds = durationSec % 60
+                            val durationStr = String.format("%02d:%02d", minutes, seconds)
+                            val thumbnail = obj.optString("thumbnail", "")
+                            
+                            results.add(Song(
+                                id = "yt_$videoId",
+                                title = title,
+                                artist = artist,
+                                duration = durationStr,
+                                thumbnailUrl = thumbnail,
+                                audioUrl = "" // resolved dynamically
+                            ))
+                        }
+                        if (results.isNotEmpty()) {
+                            return@withContext results
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        emptyList()
+    }
+
+    suspend fun resolveStreamUrl(id: String, title: String, artist: String): String? = withContext(Dispatchers.IO) {
+        val videoId = if (id.startsWith("yt_") && !id.startsWith("yt_trend") && !id.startsWith("yt_search")) {
+            id.removePrefix("yt_")
+        } else {
+            val searchResults = searchPiped("$title $artist")
+            if (searchResults.isNotEmpty()) {
+                searchResults.first().id.removePrefix("yt_")
+            } else {
+                null
+            }
+        }
+
+        if (videoId == null) return@withContext null
+
+        for (instance in PIPED_INSTANCES) {
+            try {
+                val url = "$instance/streams/$videoId"
+                val request = Request.Builder()
+                    .url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+                    .build()
+                client.newCall(request).execute().use { response ->
+                    if (response.isSuccessful) {
+                        val body = response.body?.string() ?: return@use
+                        val json = JSONObject(body)
+                        val audioStreams = json.optJSONArray("audioStreams")
+                        if (audioStreams != null && audioStreams.length() > 0) {
+                            return@withContext audioStreams.getJSONObject(0).getString("url")
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+        }
+        null
+    }
+
     suspend fun searchSongs(query: String): List<Song> = withContext(Dispatchers.IO) {
+        val pipedResults = searchPiped(query)
+        if (pipedResults.isNotEmpty()) {
+            return@withContext pipedResults
+        }
+
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
             // Local fallback filter based on query
@@ -187,6 +292,11 @@ object GeminiClient {
     }
 
     suspend fun getTrendingCharts(): List<Song> = withContext(Dispatchers.IO) {
+        val pipedTrending = searchPiped("أغاني جديدة 2026")
+        if (pipedTrending.isNotEmpty()) {
+            return@withContext pipedTrending.take(10)
+        }
+
         val apiKey = BuildConfig.GEMINI_API_KEY
         if (apiKey.isEmpty() || apiKey == "MY_GEMINI_API_KEY") {
             return@withContext fallbackSongs
@@ -240,7 +350,6 @@ object GeminiClient {
                 val artist = obj.optString("artist", "Popular Artist")
                 val duration = obj.optString("duration", "04:15")
                 
-                val audioUrl = audioPool[(i + 4) % audioPool.size]
                 val thumbnailUrl = coverArts[(i + 2) % coverArts.size]
 
                 results.add(Song(
@@ -249,7 +358,7 @@ object GeminiClient {
                     artist = artist,
                     duration = duration,
                     thumbnailUrl = thumbnailUrl,
-                    audioUrl = audioUrl
+                    audioUrl = "" // Will resolve to actual stream dynamically on play!
                 ))
             }
             results
