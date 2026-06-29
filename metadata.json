@@ -1,0 +1,6 @@
+{
+  "name": "yMusic",
+  "description": "An ad-free music application pulling from YouTube Music with offline downloads, playlists, and background playback.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
