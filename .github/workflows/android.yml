@@ -19,6 +19,14 @@ jobs:
         distribution: 'temurin'
         cache: gradle
 
+    - name: Create debug keystore
+      run: |
+        mkdir -p ~/.android
+        keytool -genkey -v -keystore debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US"
+        cp debug.keystore ~/.android/
+        # لو التطبيق بيدور عليه في الفولدر الرئيسي للمشروع
+        cp debug.keystore ./
+
     - name: Build with Gradle
       run: |
         if [ -f gradlew ]; then
@@ -33,4 +41,3 @@ jobs:
       with:
         name: ymusic-app
         path: "**/build/outputs/apk/debug/*.apk"
-
